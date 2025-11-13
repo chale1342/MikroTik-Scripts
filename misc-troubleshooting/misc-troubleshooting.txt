@@ -1,0 +1,274 @@
+# MikroTik RouterOS 7.21 - Misc Troubleshooting Scripts
+# General-purpose tools for live diagnostics, interface/bridge/VLAN checks,
+# DHCP, DNS, routing, wireless health, and quick sanity checks.
+
+# NOTE: These are designed to be pasted directly into a terminal.
+# They use global functions so you can re-run them quickly in a session.
+
+# ========================================
+# 1. INTERFACE HEALTH SUMMARY
+# ========================================
+# Shows link status, errors, drops, and basic stats for all interfaces.
+
+:global ifHealthSummary do={
+    :put "=== Interface Health Summary ===";
+    :put "Time: $[/system clock get time]  Date: $[/system clock get date]";
+    :put "";
+    :foreach i in=[/interface find] do={
+        :local name [/interface get $i name];
+        :local type [/interface get $i type];
+        :local running [/interface get $i running];
+        :local disabled [/interface get $i disabled];
+        :local txDrops [/interface get $i tx-drop];
+        :local rxDrops [/interface get $i rx-drop];
+        :local txErr [/interface get $i tx-error];
+        :local rxErr [/interface get $i rx-error];
+        :put "Interface: $name ($type)";
+        :put "  Status: ";
+        :if ($disabled) do={ :put "    DISABLED"; } else={
+            :if ($running) do={ :put "    RUNNING"; } else={ :put "    NOT-RUNNING"; };
+        };
+        :put "  TX Drops: $txDrops  RX Drops: $rxDrops";
+        :put "  TX Errors: $txErr  RX Errors: $rxErr";
+        :put "";
+    };
+};
+
+# Run:
+$ifHealthSummary
+
+
+# ========================================
+# 2. QUICK LINK & NEGOTIATION CHECK (COPPER PORTS)
+# ========================================
+# Shows Ethernet links, speeds, and duplex to catch mismatch issues.
+
+:global ethLinkCheck do={
+    :put "=== Ethernet Link & Negotiation Check ===";
+    :foreach e in=[/interface ethernet find] do={
+        :local name [/interface ethernet get $e name];
+        :local status [/interface get $e running];
+        :local autoNeg [/interface ethernet get $e auto-negotiation];
+        :local rate [/interface ethernet get $e rate];
+        :local fullDuplex [/interface ethernet get $e full-duplex];
+        :put "Port: $name";
+        :put "  Running: $status";
+        :put "  Auto-Negotiation: $autoNeg";
+        :put "  Rate: $rate";
+        :put "  Full duplex: $fullDuplex";
+        :put "";
+    };
+};
+
+# Run:
+$ethLinkCheck
+
+
+# ========================================
+# 3. BRIDGE & VLAN SANITY CHECK
+# ========================================
+# Lists bridges, ports, VLANs, and tagging to spot misconfigurations.
+
+:global bridgeVlanCheck do={
+    :put "=== Bridge & VLAN Overview ===";
+    :put "--- Bridges ---";
+    /interface bridge print detail without-paging;
+    :put "";
+    :put "--- Bridge Ports ---";
+    /interface bridge port print detail without-paging;
+    :put "";
+    :put "--- Bridge VLANs ---";
+    /interface bridge vlan print detail without-paging;
+};
+
+# Run:
+$bridgeVlanCheck
+
+
+# ========================================
+# 4. DHCP SERVER TROUBLESHOOTING
+# ========================================
+# Shows leases, conflicts, and pool usage for all DHCP servers.
+
+:global dhcpTroubleshoot do={
+    :put "=== DHCP Troubleshooting ===";
+    :put "--- DHCP Servers ---";
+    /ip dhcp-server print detail without-paging;
+    :put "";
+    :put "--- DHCP Networks ---";
+    /ip dhcp-server network print detail without-paging;
+    :put "";
+    :put "--- DHCP Pools ---";
+    /ip pool print detail without-paging;
+    :put "";
+    :put "--- Active Leases (bound) ---";
+    /ip dhcp-server lease print where status="bound";
+    :put "";
+    :put "--- Offered / Unbound / Declined Leases ---";
+    /ip dhcp-server lease print where status!="bound";
+};
+
+# Run:
+$dhcpTroubleshoot
+
+
+# ========================================
+# 5. DNS RESOLUTION & LATENCY CHECK
+# ========================================
+# Tests DNS servers, latency, and cache hits for common hostnames.
+
+:global dnsHealthCheck do={
+    :put "=== DNS Health Check ===";
+    :put "--- Configured DNS Servers ---";
+    /ip dns print;
+    :put "";
+    :put "--- DNS Cache Entries (count only) ---";
+    /ip dns cache print count-only;
+    :put "";
+
+    :local testHosts {"google.com";"cloudflare.com";"mikrotik.com"};
+    :foreach h in=$testHosts do={
+        :put "Testing DNS + ping for: $h";
+        :do {
+            /ping $h count=3;
+        } on-error={
+            :put "  ERROR: Could not resolve or ping $h";
+        };
+        :put "";
+    };
+};
+
+# Run:
+$dnsHealthCheck
+
+
+# ========================================
+# 6. DEFAULT ROUTE & GATEWAY REACHABILITY
+# ========================================
+# Verifies that default gateways are up and pingable.
+
+:global routeGatewayCheck do={
+    :put "=== Route & Gateway Check ===";
+    :put "--- Default Routes ---";
+    /ip route print where dst-address="0.0.0.0/0";
+    :put "";
+    :foreach r in=[/ip route find dst-address="0.0.0.0/0"] do={
+        :local gateway [/ip route get $r gateway];
+        :put "Pinging gateway $gateway";
+        :do {
+            /ping $gateway count=4;
+        } on-error={
+            :put "  ERROR: Failed to ping gateway $gateway";
+        };
+        :put "";
+    };
+};
+
+# Run:
+#$routeGatewayCheck
+
+
+# ========================================
+# 7. INTERNET CONNECTIVITY QUICK TEST
+# ========================================
+# Pings public IP + resolves & pings common domains.
+
+:global internetQuickTest do={
+    :put "=== Internet Quick Test ===";
+    :put "Pinging 8.8.8.8 (Google DNS)";
+    /ping 8.8.8.8 count=4;
+    :put "";
+    :put "Pinging 1.1.1.1 (Cloudflare DNS)";
+    /ping 1.1.1.1 count=4;
+    :put "";
+    :local testDomains {"google.com";"cloudflare.com";"mikrotik.com"};
+    :foreach d in=$testDomains do={
+        :put "Pinging domain: $d";
+        /ping $d count=4;
+        :put "";
+    };
+};
+
+# Run:
+$internetQuickTest
+
+
+# ========================================
+# 8. WIRELESS HEALTH SUMMARY (CAP / AP)
+# ========================================
+# Summarizes wireless interfaces, registration table, and signal quality.
+
+:global wifiHealthSummary do={
+    :put "=== Wireless Health Summary ===";
+    :put "--- Wireless Interfaces ---";
+    /interface wireless print detail without-paging;
+    :put "";
+    :put "--- Registration Table ---";
+    /interface wireless registration-table print detail without-paging;
+};
+
+# Run:
+#$wifiHealthSummary
+
+
+# ========================================
+# 9. LOGGING SNAPSHOT (LAST 100 LINES)
+# ========================================
+# Grabs recent logs so you can capture state before reboot/changes.
+
+:global logSnapshot do={
+    :put "=== Last 100 Log Entries ===";
+    /log print where !message~"system,error,critical";
+};
+
+# Run:
+#$logSnapshot
+
+
+# ========================================
+# 10. GENERAL HEALTH SUMMARY WRAPPER
+# ========================================
+# Runs key checks in sequence for a quick picture.
+
+:global miscHealthSummary do={
+    :put "============================================";
+    :put "  MISC TROUBLESHOOTING HEALTH SUMMARY";
+    :put "  Time: $[/system clock get time]  Date: $[/system clock get date]";
+    :put "============================================";
+    :put "";
+
+    $ifHealthSummary;
+    :put "--------------------------------------------";
+
+    $ethLinkCheck;
+    :put "--------------------------------------------";
+
+    $routeGatewayCheck;
+    :put "--------------------------------------------";
+
+    $internetQuickTest;
+    :put "--------------------------------------------";
+
+    $dhcpTroubleshoot;
+    :put "--------------------------------------------";
+
+    $dnsHealthCheck;
+    :put "--------------------------------------------";
+
+    $logSnapshot;
+    :put "--------------------------------------------";
+
+    :put "======== END MISC HEALTH SUMMARY =========";
+};
+
+# Run the combined summary:
+#$miscHealthSummary
+
+
+# ========================================
+# USAGE NOTES
+# ========================================
+# - Copy/paste any :global block into a terminal to load it.
+# - Then call it by name, e.g.: $ifHealthSummary
+# - These functions are NOT persistent across reboot; for persistence,
+#   store them under /system script and call from there.

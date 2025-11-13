@@ -1,0 +1,220 @@
+# MikroTik RouterOS 7.21 - VoIP Troubleshooting & Analysis Scripts
+# Collection of scripts for diagnosing VoIP issues, analyzing traffic, and monitoring quality
+
+# ========================================
+# 1. REAL-TIME VOIP TRAFFIC MONITOR
+# ========================================
+# Monitors active VoIP connections with packet statistics
+# Usage: Run to see live VoIP traffic with jitter, packet loss, and latency indicators
+
+:global voipMonitor do={
+    :put "=== VoIP Traffic Monitor (RouterOS 7.21) ==="
+    :put "Timestamp: $[/system clock get time] $[/system clock get date]"
+    :put ""
+    
+    # Check SIP connections
+    :put "--- Active SIP Connections ---"
+    :local sipCount 0
+    :foreach conn in=[/ip firewall connection find protocol=udp dst-port=5060] do={
+        :local srcAddr [/ip firewall connection get $conn src-address]
+        :local dstAddr [/ip firewall connection get $conn dst-address]
+        :local timeout [/ip firewall connection get $conn timeout]
+        :put "SIP: $srcAddr -> $dstAddr (Timeout: $timeout)"
+        :set sipCount ($sipCount + 1)
+    }
+    :put "Total SIP connections: $sipCount"
+    :put ""
+    
+    # Check RTP streams (common ports 10000-20000)
+    :put "--- Active RTP Streams ---"
+    :local rtpCount 0
+    :foreach conn in=[/ip firewall connection find protocol=udp] do={
+        :local dstPort [/ip firewall connection get $conn dst-port]
+        :if ($dstPort >= 10000 && $dstPort <= 20000) do={
+            :local srcAddr [/ip firewall connection get $conn src-address]
+            :local dstAddr [/ip firewall connection get $conn dst-address]
+            :local packets [/ip firewall connection get $conn packets]
+            :local bytes [/ip firewall connection get $conn bytes]
+            :put "RTP: $srcAddr -> $dstAddr:$dstPort | Packets: $packets | Bytes: $bytes"
+            :set rtpCount ($rtpCount + 1)
+        }
+    }
+    :put "Total RTP streams: $rtpCount"
+    :put ""
+}
+
+# Run the monitor
+$voipMonitor
+
+
+# ========================================
+# 2. VOIP QOS ANALYZER
+# ========================================
+# Analyzes QoS markings and queue statistics for VoIP traffic
+# Helps identify if VoIP packets are being properly prioritized
+
+:global voipQosAnalyzer do={
+    :put "=== VoIP QoS Analyzer ==="
+    :put ""
+    
+    # Check queue tree for VoIP queues
+    :put "--- Queue Statistics ---"
+    :foreach queue in=[/queue tree find] do={
+        :local qName [/queue tree get $queue name]
+        :if ([:find $qName "voip"] >= 0 || [:find $qName "sip"] >= 0 || [:find $qName "rtp"] >= 0) do={
+            :local qPackets [/queue tree get $queue packets]
+            :local qBytes [/queue tree get $queue bytes]
+            :local qDropped [/queue tree get $queue dropped]
+            :local qLimit [/queue tree get $queue limit-at]
+            :local qMax [/queue tree get $queue max-limit]
+            :put "Queue: $qName"
+            :put "  Packets: $qPackets | Bytes: $qBytes | Dropped: $qDropped"
+            :put "  Limit: $qLimit | Max: $qMax"
+            :put ""
+        }
+    }
+    
+    # Check simple queues
+    :put "--- Simple Queue Statistics ---"
+    :foreach queue in=[/queue simple find] do={
+        :local qName [/queue simple get $queue name]
+        :if ([:find [:tostr $qName] "voip"] >= 0 || [:find [:tostr $qName] "sip"] >= 0) do={
+            :local qTarget [/queue simple get $queue target]
+            :local qPackets [/queue simple get $queue packets]
+            :local qBytes [/queue simple get $queue bytes]
+            :local qDropped [/queue simple get $queue dropped]
+            :put "Queue: $qName | Target: $qTarget"
+            :put "  Packets: $qPackets | Bytes: $qBytes | Dropped: $qDropped"
+            :put ""
+        }
+    }
+    
+    # Check mangle rules for DSCP/TOS marking
+    :put "--- VoIP Mangle Rules ---"
+    :foreach rule in=[/ip firewall mangle find] do={
+        :local rComment [/ip firewall mangle get $rule comment]
+        :local rAction [/ip firewall mangle get $rule action]
+        :if ([:find [:tostr $rComment] "voip"] >= 0 || [:find [:tostr $rComment] "sip"] >= 0 || [:find [:tostr $rComment] "rtp"] >= 0 || $rAction = "set-priority" || $rAction = "change-dscp") do={
+            :local rChain [/ip firewall mangle get $rule chain]
+            :local rPackets [/ip firewall mangle get $rule packets]
+            :local rBytes [/ip firewall mangle get $rule bytes]
+            :put "Rule: $rComment"
+            :put "  Chain: $rChain | Action: $rAction"
+            :put "  Packets: $rPackets | Bytes: $rBytes"
+            :put ""
+        }
+    }
+}
+
+$voipQosAnalyzer
+
+
+# ========================================
+# 3. SIP REGISTRATION CHECKER
+# ========================================
+# Monitors SIP registration attempts and failures
+# Useful for diagnosing authentication and connectivity issues
+
+:global sipRegistrationCheck do={
+    :put "=== SIP Registration Checker ==="
+    :put ""
+    
+    # Check for SIP packets in connection tracking
+    :local sipRegistered 0
+    :local sipFailed 0
+    
+    :put "--- Active SIP Sessions ---"
+    :foreach conn in=[/ip firewall connection find protocol=udp dst-port=5060] do={
+        :local srcAddr [/ip firewall connection get $conn src-address]
+        :local dstAddr [/ip firewall connection get $conn dst-address]
+        :local connTimeout [/ip firewall connection get $conn timeout]
+        :put "Session: $srcAddr -> $dstAddr (Timeout: $connTimeout)"
+        :set sipRegistered ($sipRegistered + 1)
+    }
+    
+    :foreach conn in=[/ip firewall connection find protocol=udp src-port=5060] do={
+        :local srcAddr [/ip firewall connection get $conn src-address]
+        :local dstAddr [/ip firewall connection get $conn dst-address]
+        :local connTimeout [/ip firewall connection get $conn timeout]
+        :put "Session: $srcAddr -> $dstAddr (Timeout: $connTimeout)"
+        :set sipRegistered ($sipRegistered + 1)
+    }
+    
+    :put ""
+    :put "Total active SIP sessions: $sipRegistered"
+    :put ""
+    
+    # Check firewall rules blocking SIP
+    :put "--- Firewall Rules Affecting SIP (Port 5060) ---"
+    :foreach rule in=[/ip firewall filter find] do={
+        :local rProto [/ip firewall filter get $rule protocol]
+        :local rDstPort [/ip firewall filter get $rule dst-port]
+        :local rAction [/ip firewall filter get $rule action]
+        :if (($rProto = "udp" || $rProto = "tcp") && $rDstPort = "5060") do={
+            :local rChain [/ip firewall filter get $rule chain]
+            :local rComment [/ip firewall filter get $rule comment]
+            :local rPackets [/ip firewall filter get $rule packets]
+            :put "Chain: $rChain | Action: $rAction | Packets: $rPackets"
+            :put "  Comment: $rComment"
+        }
+    }
+}
+
+$sipRegistrationCheck
+
+
+# ========================================
+# 4. VOIP LATENCY & JITTER DETECTOR
+# ========================================
+# Uses connection tracking and torch to estimate latency issues
+# Note: For accurate jitter measurement, use external tools, but this provides indicators
+
+:global voipLatencyCheck do={
+    :put "=== VoIP Latency & Jitter Detector ==="
+    :put ""
+    
+    # Get interface with most VoIP traffic
+    :put "--- Interface Statistics (Look for packet errors/drops) ---"
+    :foreach iface in=[/interface find type=ether] do={
+        :local ifName [/interface get $iface name]
+        :local ifTxDrop [/interface get $iface tx-drop]
+        :local ifRxDrop [/interface get $iface rx-drop]
+        :local ifTxError [/interface get $iface tx-error]
+        :local ifRxError [/interface get $iface rx-error]
+        
+        :if ($ifTxDrop > 0 || $ifRxDrop > 0 || $ifTxError > 0 || $ifRxError > 0) do={
+            :put "Interface: $ifName"
+            :put "  TX Drops: $ifTxDrop | RX Drops: $ifRxDrop"
+            :put "  TX Errors: $ifTxError | RX Errors: $ifRxError"
+            :put "  ** Packet loss detected - may cause VoIP issues! **"
+            :put ""
+        }
+    }
+    
+    # Check CPU load (high CPU can cause jitter)
+    :local cpuLoad [/system resource get cpu-load]
+    :put "--- System Resources ---"
+    :put "CPU Load: $cpuLoad%"
+    :if ($cpuLoad > 80) do={
+        :put "  ** WARNING: High CPU load may cause VoIP jitter! **"
+    }
+    
+    :local freeMemory [/system resource get free-memory]
+    :local totalMemory [/system resource get total-memory]
+    :put "Free Memory: $freeMemory / $totalMemory"
+    :put ""
+    
+    # Check connection tracking table usage
+    :local maxEntries [/ip firewall connection tracking get max-entries]
+    :local totalEntries [/ip firewall connection print count-only]
+    :local usagePercent (($totalEntries * 100) / $maxEntries)
+    :put "--- Connection Tracking ---"
+    :put "Entries: $totalEntries / $maxEntries ($usagePercent%)"
+    :if ($usagePercent > 90) do={
+        :put "  ** WARNING: Connection table nearly full - may drop VoIP calls! **"
+    }
+    :put ""
+}
+
+$voipLatencyCheck
+
